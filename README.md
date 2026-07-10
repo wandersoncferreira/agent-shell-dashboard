@@ -47,6 +47,10 @@ Tune or replace it:
 ;; string (see agent-shell-dashboard-excerpt-function).
 ```
 
+**Conclusions report** (`a`) reuses the same command: one async job over every
+live session, rendering a buffer of per-session ≤N-word conclusions. Falls back
+to a message when the summarizer CLI isn't available.
+
 ## Install (Doom Emacs)
 
 `packages.el`:
@@ -87,9 +91,9 @@ Then `doom sync` and restart. Bind it if you like: `(map! :leader "d" #'agent-sh
 | `TAB` / `S-TAB` | Next / prev row | `f` | Fork session at point |
 | `c` | New session | `m` | Set model at point |
 | `w` | New worktree session | `K` | Kill session at point |
-| `a` | Conclusions (`claude -p`) | `X` | Close all |
-| `d` | Pending decisions | `g` / `r` | Refresh |
-| `P` | Switch project | `q` / `?` | Quit / Help |
+| `a` | Conclusions report (async) | `X` | Close all |
+| `P` | Switch project | `g` / `r` | Refresh |
+| `q` / `?` | Quit / Help | | |
 
 Every action delegates to a configurable `agent-shell-dashboard-*-function`, so
 you can wire keys to your own commands without editing the package.

@@ -171,15 +171,14 @@ Called with the session buffer at point current, when there is one."
 Guarded at call time, so a missing projectile just reports unavailability."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
-(defcustom agent-shell-dashboard-conclusions-function nil
+(defcustom agent-shell-dashboard-conclusions-function
+  #'agent-shell-dashboard-conclusions-default
   "Command invoked by `a' to summarise session conclusions.
-No core equivalent exists; set this to your own summariser to enable `a'."
-  :type '(choice function (const :tag "Unconfigured" nil)))
-
-(defcustom agent-shell-dashboard-pending-decisions-function nil
-  "Command invoked by `d' for a pending-decisions report.
-The \"Needs you\" section already surfaces this inline; set this only if you
-have a dedicated report command."
+Defaults to a built-in that runs one async summarizer job (via
+`agent-shell-dashboard-summary-command') over all live sessions and
+shows a report buffer of per-session <=N-word conclusions.  Falls back
+to a message when the summarizer CLI is unavailable.  Override to plug
+in your own summariser."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
 (defcustom agent-shell-dashboard-close-all-function
@@ -520,6 +519,113 @@ refresh, so any expensive work must be cached and asynchronous."
                         agent-shell-dashboard-excerpt-tail)
                  (function :tag "Custom function")))
 
+;;;; Conclusions — a per-session <=N-word "what did we conclude?" report
+;;
+;; One async batch job (via `agent-shell-dashboard-summary-command', the same
+;; CLI the sub-line summary uses) over every live session, rendered into a
+;; report buffer.  Reuses the summary word-limit and input-chars knobs.
+
+(defun agent-shell-dashboard--transcript-tail (buffer chars)
+  "Return the last CHARS characters of BUFFER's transcript, trimmed, or nil."
+  (let ((tf (buffer-local-value 'agent-shell--transcript-file buffer)))
+    (when (and tf (file-readable-p tf))
+      (with-temp-buffer
+        (insert-file-contents tf)
+        (let* ((s (string-trim (buffer-string)))
+               (len (length s)))
+          (if (> len chars) (substring s (- len chars)) s))))))
+
+(defun agent-shell-dashboard--conclusions-prompt (indexed)
+  "Build the batch conclusions prompt from INDEXED, a list of (N . BUFFER)."
+  (concat
+   (format (concat "For each session below, state in AT MOST %d words the "
+                   "conclusion reached in its last messages. If there is no "
+                   "clear conclusion, say \"no clear conclusion\". Output "
+                   "exactly one line per session in the form `N| conclusion` "
+                   "where N is the session number. Output nothing else.\n\n")
+           agent-shell-dashboard-summary-word-limit)
+   (mapconcat
+    (lambda (pair)
+      (let ((tail (or (agent-shell-dashboard--transcript-tail
+                       (cdr pair) agent-shell-dashboard-summary-input-chars)
+                      "(no transcript)")))
+        (format "=== Session %d: %s ===\n%s\n"
+                (car pair) (buffer-name (cdr pair)) tail)))
+    indexed "\n")))
+
+(defun agent-shell-dashboard--conclusions-render (indexed output out-buffer)
+  "Parse OUTPUT lines `N| text' and render INDEXED conclusions into OUT-BUFFER."
+  (let ((table (make-hash-table :test 'eql)))
+    (dolist (line (split-string output "\n" t))
+      (when (string-match
+             "^[ \t]*\\[?\\([0-9]+\\)\\]?[ \t]*[|:.)-][ \t]*\\(.+\\)$" line)
+        (puthash (string-to-number (match-string 1 line))
+                 (string-trim (match-string 2 line))
+                 table)))
+    (with-current-buffer out-buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "Agent-Shell — Conclusions\n"
+                "=========================\n\n")
+        (dolist (pair indexed)
+          (insert (format "%-34s %s\n"
+                          (buffer-name (cdr pair))
+                          (or (gethash (car pair) table) "—"))))))))
+
+(defun agent-shell-dashboard-conclusions-default ()
+  "Summarize, in <=N words each, every live session's last-message conclusion.
+Runs one async job via `agent-shell-dashboard-summary-command' over all
+live agent-shell buffers and shows the results in a report buffer.
+Default for `agent-shell-dashboard-conclusions-function'; degrades to a
+message when the summarizer program is unavailable."
+  (interactive)
+  (let ((program (car agent-shell-dashboard-summary-command))
+        (buffers (agent-shell-dashboard--buffers)))
+    (cond
+     ((null buffers) (message "No agent-shell sessions to analyze"))
+     ((not (and program (executable-find program)))
+      (message "Conclusions need `%s' on PATH (see `agent-shell-dashboard-summary-command')"
+               (or program "a summarizer")))
+     (t
+      (let* ((indexed (seq-map-indexed (lambda (b i) (cons (1+ i) b)) buffers))
+             (prompt (agent-shell-dashboard--conclusions-prompt indexed))
+             (out (get-buffer-create "*agent-shell-conclusions*")))
+        (with-current-buffer out
+          (special-mode)
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert (format "Analyzing %d session(s)…\n" (length buffers)))))
+        (display-buffer out)
+        (condition-case _err
+            (let ((proc (make-process
+                         :name "agent-shell-dashboard-conclusions"
+                         :buffer (generate-new-buffer " *asd-conclusions*")
+                         :command agent-shell-dashboard-summary-command
+                         :connection-type 'pipe
+                         :noquery t
+                         :sentinel
+                         (lambda (p _event)
+                           (when (memq (process-status p) '(exit signal))
+                             (let ((output (with-current-buffer (process-buffer p)
+                                             (buffer-string))))
+                               (kill-buffer (process-buffer p))
+                               (when (buffer-live-p out)
+                                 (if (string-empty-p (string-trim output))
+                                     (with-current-buffer out
+                                       (let ((inhibit-read-only t))
+                                         (erase-buffer)
+                                         (insert "No output from the summarizer CLI.\n")))
+                                   (agent-shell-dashboard--conclusions-render
+                                    indexed output out)))))))))
+              (process-send-string proc prompt)
+              (process-send-eof proc))
+          (error
+           (when (buffer-live-p out)
+             (with-current-buffer out
+               (let ((inhibit-read-only t))
+                 (erase-buffer)
+                 (insert "Failed to start the summarizer process.\n")))))))))))
+
 ;;;; Worktree awareness (generic; mirrors my-ai.el)
 
 (defun agent-shell-dashboard--linked-worktree-p (dir)
@@ -669,8 +775,7 @@ refresh, so any expensive work must be cached and asynchronous."
                   ("w" . "New worktree session")
                   ("R" . "Reopen a previous session")
                   ("f" . "Fork session at point")
-                  ("a" . "Conclusions (claude -p)")
-                  ("d" . "Pending decisions")
+                  ("a" . "Conclusions report")
                   ("m" . "Set model")
                   ("P" . "Switch project")
                   ("K" . "Kill session at point")
@@ -1128,13 +1233,6 @@ Delegates to `agent-shell-dashboard-conclusions-function'."
   (agent-shell-dashboard--invoke agent-shell-dashboard-conclusions-function
                                  'agent-shell-dashboard-conclusions-function))
 
-(defun agent-shell-dashboard-pending-decisions ()
-  "Report sessions that still need a decision.
-Delegates to `agent-shell-dashboard-pending-decisions-function'."
-  (interactive)
-  (agent-shell-dashboard--invoke agent-shell-dashboard-pending-decisions-function
-                                 'agent-shell-dashboard-pending-decisions-function))
-
 (defun agent-shell-dashboard-set-model ()
   "Set the model of the session at point (or the last-active one).
 Delegates to `agent-shell-dashboard-set-model-function', run with the
@@ -1212,8 +1310,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (princ "  K   Kill session at point\n")
     (princ "  X   Close all sessions\n\n")
     (princ "Insight\n")
-    (princ "  a   Conclusions (claude -p)\n")
-    (princ "  d   Pending decisions report\n\n")
+    (princ "  a   Conclusions report (async summary of every session)\n\n")
     (princ "Misc\n")
     (princ "  P   Switch project\n")
     (princ "  g / r   Refresh\n")
@@ -1233,7 +1330,6 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   "R"         #'agent-shell-dashboard-resume-session
   "f"         #'agent-shell-dashboard-fork-at-point
   "a"         #'agent-shell-dashboard-conclusions
-  "d"         #'agent-shell-dashboard-pending-decisions
   "m"         #'agent-shell-dashboard-set-model
   "P"         #'agent-shell-dashboard-switch-project
   "K"         #'agent-shell-dashboard-kill-at-point
@@ -1267,7 +1363,6 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     "R" #'agent-shell-dashboard-resume-session
     "f" #'agent-shell-dashboard-fork-at-point
     "a" #'agent-shell-dashboard-conclusions
-    "d" #'agent-shell-dashboard-pending-decisions
     "m" #'agent-shell-dashboard-set-model
     "P" #'agent-shell-dashboard-switch-project
     "K" #'agent-shell-dashboard-kill-at-point
