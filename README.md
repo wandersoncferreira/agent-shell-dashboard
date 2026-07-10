@@ -4,6 +4,9 @@ A landing page for [`agent-shell`](https://github.com/xenodium/agent-shell) —
 one read-only buffer that shows every agent session at a glance, in the spirit
 of doom-dashboard.
 
+<img width="771" height="928" alt="Screenshot 2026-07-10 at 09 21 14" src="https://github.com/user-attachments/assets/e824dabf-3b2b-4564-9478-244284d23aa0" />
+
+
 ## Sections
 
 - **Needs you** — the triage queue: sessions awaiting a permission decision or
