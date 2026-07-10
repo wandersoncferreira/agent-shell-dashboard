@@ -398,23 +398,127 @@ The tail is shown because prompts/questions tend to land at the end."
           (concat "…" (substring clean (- (length clean) w)))
         clean))))
 
-(defun agent-shell-dashboard--excerpt-default (_buffer message)
-  "Default sub-line: a truncated tail of MESSAGE (BUFFER is ignored)."
+(defun agent-shell-dashboard-excerpt-tail (_buffer message)
+  "Sub-line variant: a truncated tail of MESSAGE (BUFFER is ignored).
+Opt in by setting `agent-shell-dashboard-excerpt-function' to this if
+you prefer the raw last-message tail over the default summary."
   (agent-shell-dashboard--excerpt message))
 
+;;;; Last-reply summary (the default sub-line)
+;;
+;; The "Needs you" sub-line defaults to a short (<= N words) summary of the
+;; agent's last reply, produced by an external CLI (Claude by default) run
+;; ASYNCHRONOUSLY and cached per buffer.  Rendering never blocks: on a cache
+;; miss it kicks off one background job and shows a head-of-message
+;; placeholder, then refreshes the dashboard when the summary lands.  When the
+;; summarizer program is not installed, it degrades to the plain tail excerpt,
+;; so the default is safe with zero configuration.
+
+(defcustom agent-shell-dashboard-summary-command
+  '("claude" "-p" "--allowed-tools" "")
+  "Command (program + args) run to summarize an agent's last reply.
+The prompt is written to the process's stdin and the summary read from
+its stdout.  The default uses the `claude' CLI in headless print mode.
+When the program is not found on `exec-path', the sub-line falls back to
+a plain tail excerpt.  Add e.g. \"--model\" \"haiku\" for a faster model."
+  :type '(repeat string))
+
+(defcustom agent-shell-dashboard-summary-word-limit 10
+  "Maximum number of words requested for a last-reply summary."
+  :type 'integer)
+
+(defcustom agent-shell-dashboard-summary-input-chars 1500
+  "Trailing characters of the last reply sent to the summarizer."
+  :type 'integer)
+
+(defvar agent-shell-dashboard--summary-cache
+  (make-hash-table :test 'eq :weakness 'key)
+  "Cache of agent-shell BUFFER -> (MSG-HASH . SUMMARY).")
+
+(defvar agent-shell-dashboard--summary-inflight
+  (make-hash-table :test 'eq :weakness 'key)
+  "Agent-shell BUFFER -> MSG-HASH of an in-flight summary job (dedup guard).")
+
+(defun agent-shell-dashboard--summary-placeholder (message)
+  "Return a head-of-MESSAGE placeholder shown while a summary is pending."
+  (let* ((clean (replace-regexp-in-string "[ \t\n]+" " " (string-trim message)))
+         (head (if (> (length clean) 60) (concat (substring clean 0 60) "…") clean)))
+    (concat "summarizing… " head)))
+
+(defun agent-shell-dashboard--summarize-async (buffer msg-hash text)
+  "Summarize TEXT for BUFFER via `agent-shell-dashboard-summary-command'.
+Stores (MSG-HASH . SUMMARY) in the cache and refreshes the dashboard on
+success.  MSG-HASH tags the request so a result is cached under the
+message it actually describes."
+  (puthash buffer msg-hash agent-shell-dashboard--summary-inflight)
+  (condition-case _err
+      (let* ((tail (let ((len (length text))
+                         (n agent-shell-dashboard-summary-input-chars))
+                     (if (> len n) (substring text (- len n)) text)))
+             (prompt (format (concat "In AT MOST %d words, summarize what this "
+                                     "agent message says or asks. Output only the "
+                                     "summary — no quotes, no preamble, no trailing "
+                                     "period.\n\n%s")
+                             agent-shell-dashboard-summary-word-limit tail))
+             (proc (make-process
+                    :name "agent-shell-dashboard-summary"
+                    :buffer (generate-new-buffer " *asd-summary*")
+                    :command agent-shell-dashboard-summary-command
+                    :connection-type 'pipe
+                    :noquery t
+                    :sentinel
+                    (lambda (p _event)
+                      (when (memq (process-status p) '(exit signal))
+                        (let ((out (with-current-buffer (process-buffer p)
+                                     (string-trim (buffer-string)))))
+                          (kill-buffer (process-buffer p))
+                          (when (buffer-live-p buffer)
+                            (remhash buffer agent-shell-dashboard--summary-inflight)
+                            (unless (string-empty-p out)
+                              (puthash buffer
+                                       (cons msg-hash (car (split-string out "\n" t)))
+                                       agent-shell-dashboard--summary-cache)
+                              (agent-shell-dashboard-refresh)))))))))
+        (process-send-string proc prompt)
+        (process-send-eof proc))
+    ;; make-process (or the pipe) failed — don't leave the guard stuck.
+    (error (remhash buffer agent-shell-dashboard--summary-inflight))))
+
+(defun agent-shell-dashboard-excerpt-summary (buffer message)
+  "Default sub-line: a cached <=N-word summary of MESSAGE for BUFFER.
+On a cache miss for the current MESSAGE, launch one async summarizer job
+and return a placeholder; the dashboard refreshes when it lands.
+Re-summarizes only when MESSAGE changes.  Falls back to the tail excerpt
+when `agent-shell-dashboard-summary-command's program is unavailable."
+  (when (and message (not (string-empty-p (string-trim message))))
+    (if (not (executable-find (car agent-shell-dashboard-summary-command)))
+        (agent-shell-dashboard--excerpt message)
+      (let ((hash (sxhash-equal message))
+            (cached (gethash buffer agent-shell-dashboard--summary-cache)))
+        (if (and cached (eql (car cached) hash))
+            (cdr cached)
+          (unless (eql (gethash buffer agent-shell-dashboard--summary-inflight) hash)
+            (agent-shell-dashboard--summarize-async buffer hash message))
+          (agent-shell-dashboard--summary-placeholder message))))))
+
 (defcustom agent-shell-dashboard-excerpt-function
-  #'agent-shell-dashboard--excerpt-default
+  #'agent-shell-dashboard-excerpt-summary
   "Function producing the sub-line shown under a \"Needs you\" row.
 Called with (BUFFER MESSAGE): BUFFER is the agent-shell buffer and
 MESSAGE its last agent message (a string, possibly nil).  Should return
 a one-line string to display verbatim, or nil for no sub-line.
 
-The default returns a truncated tail of MESSAGE.  Point it at your own
-function to show something else — e.g. an LLM-generated summary — but
-keep it cheap and non-blocking: it runs during render, on every
-refresh, so any expensive work (like an LLM call) must be cached and
-performed asynchronously, returning a placeholder until ready."
-  :type 'function)
+The default, `agent-shell-dashboard-excerpt-summary', shows a short
+async, cached LLM summary of the last reply (falling back to the tail
+when no summarizer CLI is present).  Set this to
+`agent-shell-dashboard-excerpt-tail' for the raw last-message tail
+instead, or to your own function.  It runs during render on every
+refresh, so any expensive work must be cached and asynchronous."
+  :type '(choice (const :tag "Async LLM summary (default)"
+                        agent-shell-dashboard-excerpt-summary)
+                 (const :tag "Raw last-message tail"
+                        agent-shell-dashboard-excerpt-tail)
+                 (function :tag "Custom function")))
 
 ;;;; Worktree awareness (generic; mirrors my-ai.el)
 

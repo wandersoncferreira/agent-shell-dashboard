@@ -21,21 +21,31 @@ of doom-dashboard.
 
 ## The last-reply summarizer
 
-The sub-line under each "Needs you" row is produced by
-`agent-shell-dashboard-excerpt-function`, called with `(buffer message)`:
+By **default**, the sub-line under each "Needs you" row is a short **≤10-word
+summary of the agent's last reply** — built in, no configuration needed. It:
 
-- **Default** — a truncated tail of the last agent message (no dependencies).
-- **Custom** — point it at your own function to show a short **summary** of the
-  last reply instead. Because it runs on every (visible) refresh, an expensive
-  summarizer must cache its result and work asynchronously, returning a
-  placeholder until ready:
+- runs `agent-shell-dashboard-summary-command` (default `claude -p`)
+  **asynchronously**, so rendering never blocks;
+- **caches** per session keyed by the message, re-summarizing only when the
+  reply changes; shows a `summarizing…` placeholder until the first result lands
+  (then auto-refreshes);
+- **falls back** to a plain last-message tail when the summarizer CLI isn't on
+  your `PATH` — so it's safe even with zero setup.
 
-  ```elisp
-  (setq agent-shell-dashboard-excerpt-function #'my/agent-summary)
-  ;; my/agent-summary: hash the message; if cached return it, else launch an
-  ;; async `claude -p' (≤10 words), cache the result keyed by the hash, and
-  ;; call `agent-shell-dashboard-refresh' when it lands.
-  ```
+Tune or replace it:
+
+```elisp
+;; Faster/cheaper model, or a different summarizer CLI entirely:
+(setq agent-shell-dashboard-summary-command '("claude" "-p" "--model" "haiku"
+                                              "--allowed-tools" ""))
+(setq agent-shell-dashboard-summary-word-limit 8)
+
+;; Prefer the raw last-message tail instead of a summary:
+(setq agent-shell-dashboard-excerpt-function #'agent-shell-dashboard-excerpt-tail)
+
+;; Or supply your own: a function of (buffer message) returning a one-line
+;; string (see agent-shell-dashboard-excerpt-function).
+```
 
 ## Install (Doom Emacs)
 
