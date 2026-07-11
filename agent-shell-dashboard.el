@@ -1404,7 +1404,11 @@ Suitable as an `initial-buffer-choice'."
   "Recolor dashboard faces from the active modus palette.
 No-op unless a modus theme is active; registered on
 `enable-theme-functions' so it tracks the light/dark toggle."
+  ;; Guarded: a half-loaded modus (stale daemon, or palette not yet realized
+  ;; during load-theme) can leave palette names void; never abort the
+  ;; enable-theme-functions hook and strand startup.
   (when (agent-shell-dashboard--modus-active-p)
+    (ignore-errors
     (modus-themes-with-colors
       (custom-set-faces
        `(agent-shell-dashboard-banner ((t :foreground ,blue-warmer :weight bold)))
@@ -1431,7 +1435,7 @@ No-op unless a modus theme is active; registered on
              :box (:line-width (1 . -1) :color ,border))))
        `(agent-shell-dashboard-badge-wt
          ((t :foreground ,cyan-cooler :background ,bg-cyan-subtle
-             :box (:line-width (1 . -1) :color ,cyan-cooler) :weight bold)))))))
+             :box (:line-width (1 . -1) :color ,cyan-cooler) :weight bold))))))))
 
 (add-hook 'enable-theme-functions #'agent-shell-dashboard--apply-theme-faces)
 (agent-shell-dashboard--apply-theme-faces)
