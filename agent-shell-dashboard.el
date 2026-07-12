@@ -174,11 +174,6 @@ renames the buffer; override with a command that also persists the name
 so it survives resume."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
-(defcustom agent-shell-dashboard-switch-project-function #'projectile-switch-project
-  "Command invoked by `P' to switch project.
-Guarded at call time, so a missing projectile just reports unavailability."
-  :type '(choice function (const :tag "Unconfigured" nil)))
-
 (defcustom agent-shell-dashboard-conclusions-function
   #'agent-shell-dashboard-conclusions-default
   "Command invoked by `a' to summarise session conclusions.
@@ -775,23 +770,30 @@ message when the summarizer program is unavailable."
     (dolist (b buffers)
       (agent-shell-dashboard--insert-session-row b))))
 
+(defun agent-shell-dashboard--insert-action (spec)
+  "Insert one `[key] label' cell for SPEC, a (KEY . LABEL) cons, padded."
+  (agent-shell-dashboard--insert (format "  [%s] " (car spec))
+                                 'face 'agent-shell-dashboard-key)
+  (agent-shell-dashboard--insert (agent-shell-dashboard--fit (cdr spec) 26)
+                                 'face 'default))
+
 (defun agent-shell-dashboard--insert-actions ()
-  "Insert the Quick actions keybinding menu."
+  "Insert the Quick actions keybinding menu in two columns."
   (agent-shell-dashboard--insert-heading
    "Quick actions" 'agent-shell-dashboard-heading-actions)
-  (dolist (spec '(("c" . "New session")
-                  ("w" . "New worktree session")
-                  ("R" . "Reopen a previous session")
-                  ("f" . "Fork session at point")
-                  ("a" . "Conclusions report")
-                  ("m" . "Set model")
-                  ("r" . "Rename session at point")
-                  ("P" . "Switch project")
-                  ("K" . "Kill session at point")
-                  ("X" . "Close all")))
-    (agent-shell-dashboard--insert (format "  [%s] " (car spec))
-                                   'face 'agent-shell-dashboard-key)
-    (insert (cdr spec) "\n")))
+  (let ((specs '(("c" . "New session")
+                 ("w" . "New worktree session")
+                 ("R" . "Reopen a previous session")
+                 ("f" . "Fork session at point")
+                 ("a" . "Conclusions report")
+                 ("m" . "Set model")
+                 ("r" . "Rename session at point")
+                 ("K" . "Kill session at point")
+                 ("X" . "Close all"))))
+    (while specs
+      (agent-shell-dashboard--insert-action (pop specs))
+      (when specs (agent-shell-dashboard--insert-action (pop specs)))
+      (insert "\n"))))
 
 ;;;; Recent sessions — previous (closed) sessions, resumable via RET
 ;;
@@ -1274,13 +1276,6 @@ session's buffer current, then refreshes."
                                    buf)
     (agent-shell-dashboard-refresh)))
 
-(defun agent-shell-dashboard-switch-project ()
-  "Switch to a known project.
-Delegates to `agent-shell-dashboard-switch-project-function'."
-  (interactive)
-  (agent-shell-dashboard--invoke agent-shell-dashboard-switch-project-function
-                                 'agent-shell-dashboard-switch-project-function))
-
 (defun agent-shell-dashboard-close-all ()
   "Close all agent-shell sessions, then refresh.
 Delegates to `agent-shell-dashboard-close-all-function'."
@@ -1345,7 +1340,6 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (princ "Insight\n")
     (princ "  a   Conclusions report (async summary of every session)\n\n")
     (princ "Misc\n")
-    (princ "  P   Switch project\n")
     (princ "  g   Refresh\n")
     (princ "  q   Quit window\n")
     (princ "  ?   This help\n")))
@@ -1365,7 +1359,6 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   "a"         #'agent-shell-dashboard-conclusions
   "m"         #'agent-shell-dashboard-set-model
   "r"         #'agent-shell-dashboard-rename-at-point
-  "P"         #'agent-shell-dashboard-switch-project
   "K"         #'agent-shell-dashboard-kill-at-point
   "X"         #'agent-shell-dashboard-close-all
   "g"         #'agent-shell-dashboard-refresh
@@ -1398,7 +1391,6 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     "a" #'agent-shell-dashboard-conclusions
     "m" #'agent-shell-dashboard-set-model
     "r" #'agent-shell-dashboard-rename-at-point
-    "P" #'agent-shell-dashboard-switch-project
     "K" #'agent-shell-dashboard-kill-at-point
     "X" #'agent-shell-dashboard-close-all
     "g" #'agent-shell-dashboard-refresh

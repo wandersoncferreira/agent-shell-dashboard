@@ -90,9 +90,9 @@ Then `doom sync` and restart. Bind it if you like: `(map! :leader "d" #'agent-sh
 | `RET` / `o` | Open (live) / reopen (recent) session | `R` | Reopen a previous session |
 | `TAB` / `S-TAB` | Next / prev row | `f` | Fork session at point |
 | `c` | New session | `m` | Set model at point |
-| `w` | New worktree session | `K` | Kill session at point |
-| `a` | Conclusions report (async) | `X` | Close all |
-| `P` | Switch project | `g` / `r` | Refresh |
+| `w` | New worktree session | `r` | Rename session at point |
+| `a` | Conclusions report (async) | `K` | Kill session at point |
+| `g` | Refresh | `X` | Close all |
 | `q` / `?` | Quit / Help | | |
 
 Every action delegates to a configurable `agent-shell-dashboard-*-function`, so
@@ -101,8 +101,8 @@ you can wire keys to your own commands without editing the package.
 ## Dependencies
 
 Only hard dependency: **`agent-shell`**. Optional, auto-detected: `modus-themes`
-(faces recolor on theme toggle), `projectile` (widens the Recent sessions scan +
-`P`), `agent-shell-manager` (extra refresh trigger). A visible dashboard
+(faces recolor on theme toggle), `projectile` (widens the Recent sessions scan),
+`agent-shell-manager` (extra refresh trigger). A visible dashboard
 refreshes on demand (`g`), on an idle timer, and (debounced) on agent activity.
 
 ## License
