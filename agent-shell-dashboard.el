@@ -734,7 +734,9 @@ message when the summarizer program is unavailable."
 
 (defun agent-shell-dashboard--badge (category worktree)
   "Return a propertized status badge for CATEGORY (WORKTREE tag optional).
-The label is padded to a fixed width so every badge is the same size."
+Rendered in `fixed-pitch' and padded to a fixed character width so every
+badge is exactly the same size under a proportional prose font; a leading
+and trailing space keep the glyph and label off the box border."
   ;; All glyphs are single-width, text-presentation symbols (no emoji): the
   ;; hourglass/warning emoji render double-width and colored, which made
   ;; badges different sizes.  These are uniform.
@@ -745,10 +747,12 @@ The label is padded to a fixed width so every badge is the same size."
                  ('ready   '("✓" "Ready"   agent-shell-dashboard-badge-ready))
                  ('killed  '("✗" "Killed"  agent-shell-dashboard-dim))
                  (_        '("•" "…"       agent-shell-dashboard-dim))))
-         (base (propertize (format "%s %-7s" (nth 0 spec) (nth 1 spec))
-                           'face (nth 2 spec))))
+         ;; `fixed-pitch' after the badge face: monospace width, badge colors.
+         (base (propertize (format " %s %-8s" (nth 0 spec) (nth 1 spec))
+                           'face (list (nth 2 spec) 'fixed-pitch))))
     (if worktree
-        (concat (propertize "[WT]" 'face 'agent-shell-dashboard-badge-wt) " " base)
+        (concat (propertize "[WT]" 'face '(agent-shell-dashboard-badge-wt fixed-pitch))
+                " " base)
       base)))
 
 (defun agent-shell-dashboard--insert-session-row (buffer)
