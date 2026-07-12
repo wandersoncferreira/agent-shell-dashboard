@@ -380,26 +380,15 @@ One of `waiting', `working', `done' (finished, unseen), `ready'
       ('ready (if (agent-shell-dashboard--unseen-p buffer) 'done 'ready))
       (_ 'other))))
 
-(defconst agent-shell-dashboard--category-rank
-  '((done . 0) (working . 1) (waiting . 2) (ready . 3) (other . 5) (killed . 9))
-  "Sort rank per category; lower sorts higher.")
-
-(defun agent-shell-dashboard--rank (buffer)
-  "Return the sort rank for BUFFER's category."
-  (alist-get (agent-shell-dashboard--category buffer)
-             agent-shell-dashboard--category-rank 5))
-
 (defun agent-shell-dashboard--sorted-buffers (&optional buffers)
-  "Return BUFFERS (default all) sorted by category then recency (newest first)."
+  "Return BUFFERS (default all) sorted by recency only (newest first).
+Sorting by recency alone keeps rows stable as statuses change — a
+status flip no longer reorders the list the way a category sort did."
   (let ((bufs (or buffers (agent-shell-dashboard--buffers))))
     (sort (copy-sequence bufs)
           (lambda (a b)
-            (let ((ra (agent-shell-dashboard--rank a))
-                  (rb (agent-shell-dashboard--rank b)))
-              (if (/= ra rb)
-                  (< ra rb)
-                (> (agent-shell-dashboard--activity-of a)
-                   (agent-shell-dashboard--activity-of b))))))))
+            (> (agent-shell-dashboard--activity-of a)
+               (agent-shell-dashboard--activity-of b))))))
 
 ;;;; Last-message analysis (generic; mirrors my-ai.el, reimplemented here)
 
