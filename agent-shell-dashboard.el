@@ -1245,13 +1245,16 @@ Delegates to `agent-shell-dashboard-conclusions-function'."
                                  'agent-shell-dashboard-conclusions-function))
 
 (defun agent-shell-dashboard-set-model ()
-  "Set the model of the session at point (or the last-active one).
-Delegates to `agent-shell-dashboard-set-model-function', run with the
-session buffer at point current when there is one."
+  "Set the model of the session on the row at point.
+Only acts when point is on a live session row; delegates to
+`agent-shell-dashboard-set-model-function' with that buffer current."
   (interactive)
-  (agent-shell-dashboard--invoke agent-shell-dashboard-set-model-function
-                                 'agent-shell-dashboard-set-model-function
-                                 (agent-shell-dashboard--buffer-at-point)))
+  (let ((buf (agent-shell-dashboard--buffer-at-point)))
+    (unless (and buf (buffer-live-p buf))
+      (user-error "Point is not on a live session row"))
+    (agent-shell-dashboard--invoke agent-shell-dashboard-set-model-function
+                                   'agent-shell-dashboard-set-model-function
+                                   buf)))
 
 (defun agent-shell-dashboard--rename-default ()
   "Default rename action: rename the current agent-shell buffer.
