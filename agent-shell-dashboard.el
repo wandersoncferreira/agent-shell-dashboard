@@ -1059,16 +1059,35 @@ Assumes the buffer is current and writable."
   (let ((buf (get-buffer agent-shell-dashboard-buffer-name)))
     (and (buffer-live-p buf) buf)))
 
+(defun agent-shell-dashboard--goto-buffer-row (buffer)
+  "Put point on the row whose live session is BUFFER.  Return non-nil if found.
+Restores position by session identity (robust to re-sorting), unlike a
+raw line number."
+  (when (buffer-live-p buffer)
+    (let (found)
+      (goto-char (point-min))
+      (while (and (not found) (not (eobp)))
+        (if (eq (get-text-property (line-beginning-position)
+                                   'agent-shell-dashboard-buffer)
+                buffer)
+            (setq found (goto-char (line-beginning-position)))
+          (forward-line 1)))
+      found)))
+
 (defun agent-shell-dashboard-refresh ()
-  "Rebuild the dashboard, preserving the current line when possible."
+  "Rebuild the dashboard, keeping point on the same session when possible.
+Prefers restoring to the session row at point by identity (survives
+re-sorting); falls back to the previous line number otherwise."
   (interactive)
   (when-let* ((buf (agent-shell-dashboard--get-buffer)))
     (with-current-buffer buf
       (let ((inhibit-read-only t)
-            (line (line-number-at-pos)))
+            (line (line-number-at-pos))
+            (target (agent-shell-dashboard--buffer-at-point)))
         (agent-shell-dashboard--render)
-        (goto-char (point-min))
-        (forward-line (1- line))))))
+        (unless (and target (agent-shell-dashboard--goto-buffer-row target))
+          (goto-char (point-min))
+          (forward-line (1- line)))))))
 
 (defun agent-shell-dashboard--maybe-refresh ()
   "Refresh the dashboard only when it is displayed in some window."
