@@ -750,8 +750,10 @@ font; a leading and trailing space keep glyph and label off the border."
          (mono (if agent-shell-dashboard-badge-family
                    (list :family agent-shell-dashboard-badge-family)
                  'fixed-pitch))
+         ;; "Working" reads a touch larger than the rest; nudge only it down.
+         (extra (when (eq category 'working) '((:height 0.95))))
          (base (propertize (format " %s %-8s" (nth 0 spec) (nth 1 spec))
-                           'face (list (nth 2 spec) mono))))
+                           'face (append (list (nth 2 spec) mono) extra))))
     (if worktree
         (concat (propertize "[WT]" 'face (list 'agent-shell-dashboard-badge-wt mono))
                 " " base)
