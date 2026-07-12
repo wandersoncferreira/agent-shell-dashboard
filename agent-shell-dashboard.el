@@ -719,16 +719,31 @@ message when the summarizer program is unavailable."
     (agent-shell-dashboard--insert (concat "   " suffix) 'face 'agent-shell-dashboard-dim))
   (insert "\n\n"))
 
+;; Absolute column stops (in default-face character units).  Fields are placed
+;; with `:align-to' stretch spaces so every column starts at the same x on
+;; every row — independent of the badge glyph/label widths and of the
+;; proportional prose font.  This is what keeps the table from jittering.
+(defconst agent-shell-dashboard--col-name 18 "Column where the name field starts.")
+(defconst agent-shell-dashboard--col-path 38 "Column where the path field starts.")
+(defconst agent-shell-dashboard--col-model 70 "Column where the model field starts.")
+(defconst agent-shell-dashboard--col-time 100 "Column where the time field starts.")
+
+(defun agent-shell-dashboard--align-to (col)
+  "Return a space whose display stretches point to COL (char units)."
+  (propertize " " 'display `(space :align-to ,col)))
+
 (defun agent-shell-dashboard--badge (category worktree)
-  "Return a propertized status badge string for CATEGORY (WORKTREE tag optional)."
-  (let ((base
-         (pcase category
-           ('done    (propertize "● Done"    'face 'agent-shell-dashboard-badge-done))
-           ('working (propertize "⏳ Working" 'face 'agent-shell-dashboard-badge-working))
-           ('waiting (propertize "⚠ Waiting" 'face 'agent-shell-dashboard-badge-waiting))
-           ('ready   (propertize "✓ Ready"   'face 'agent-shell-dashboard-badge-ready))
-           ('killed  (propertize "✗ Killed"  'face 'agent-shell-dashboard-dim))
-           (_        (propertize "… …"       'face 'agent-shell-dashboard-dim)))))
+  "Return a propertized status badge for CATEGORY (WORKTREE tag optional).
+The label is padded to a fixed width so every badge is the same size."
+  (let* ((spec (pcase category
+                 ('done    '("●" "Done"    agent-shell-dashboard-badge-done))
+                 ('working '("⏳" "Working" agent-shell-dashboard-badge-working))
+                 ('waiting '("⚠" "Waiting" agent-shell-dashboard-badge-waiting))
+                 ('ready   '("✓" "Ready"   agent-shell-dashboard-badge-ready))
+                 ('killed  '("✗" "Killed"  agent-shell-dashboard-dim))
+                 (_        '("…" "…"       agent-shell-dashboard-dim))))
+         (base (propertize (format "%s %-7s" (nth 0 spec) (nth 1 spec))
+                           'face (nth 2 spec))))
     (if worktree
         (concat (propertize "[WT]" 'face 'agent-shell-dashboard-badge-wt) " " base)
       base)))
@@ -747,18 +762,18 @@ message when the summarizer program is unavailable."
          (time (agent-shell-dashboard--relative-time
                 (agent-shell-dashboard--activity-of buffer)))
          (start (point)))
-    ;; Badge column is padded on its *display* width (badges have boxes),
-    ;; so pad by hand with a trailing gap rather than fixed char count.
+    ;; Columns are pinned with `:align-to' so nothing shifts when badge
+    ;; widths differ.  Fields are truncated (not space-padded) since the
+    ;; stretch spaces provide the gaps.
     (insert "  " badge)
-    (insert (make-string (max 1 (- 16 (string-width (substring-no-properties badge)))) ?\s))
-    (agent-shell-dashboard--insert (agent-shell-dashboard--fit name 18)
-                                   'face 'default)
-    (insert " ")
+    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-name))
+    (agent-shell-dashboard--insert (agent-shell-dashboard--fit name 18) 'face 'default)
+    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-path))
     (agent-shell-dashboard--insert path 'face 'agent-shell-dashboard-dim)
-    (insert " ")
+    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-model))
     (agent-shell-dashboard--insert (agent-shell-dashboard--fit model 28)
                                    'face 'agent-shell-dashboard-model)
-    (insert " ")
+    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-time))
     (agent-shell-dashboard--insert time 'face 'agent-shell-dashboard-dim)
     (insert "\n")
     ;; Whole row carries its buffer object so RET/o/K/m act on it.  Rows are
@@ -962,11 +977,12 @@ Columns: buffer name, working directory, and when the session was opened."
          (time (agent-shell-dashboard--relative-time
                 (or (plist-get session :opened) (plist-get session :time))))
          (start (point)))
+    ;; Same absolute column stops as the session rows so both tables line up.
     (agent-shell-dashboard--insert "  ↻ " 'face 'agent-shell-dashboard-key)
-    (agent-shell-dashboard--insert name 'face 'default)
-    (insert " ")
+    (agent-shell-dashboard--insert (agent-shell-dashboard--fit name 34) 'face 'default)
+    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-model))
     (agent-shell-dashboard--insert cwd 'face 'agent-shell-dashboard-dim)
-    (insert " ")
+    (insert (agent-shell-dashboard--align-to agent-shell-dashboard--col-time))
     (agent-shell-dashboard--insert time 'face 'agent-shell-dashboard-dim)
     (insert "\n")
     ;; Whole row carries its session plist so RET/o resumes it.
