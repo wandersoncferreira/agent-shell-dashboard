@@ -147,6 +147,15 @@ Called with one argument: the session plist (see
   "Column width for the working-directory path in the Sessions table."
   :type 'integer)
 
+(defcustom agent-shell-dashboard-badge-family nil
+  "Monospace font family for status badges, or nil to use `fixed-pitch'.
+Badges are padded to a fixed character width, which only yields equal
+sizes if drawn in a monospace font.  Set this to a real monospace family
+\(e.g. \"JetBrainsMono Nerd Font\") when your `fixed-pitch' face has been
+remapped to a proportional font."
+  :type '(choice (const :tag "Use fixed-pitch face" nil)
+                 (string :tag "Font family")))
+
 ;; Action commands.  Each key in the dashboard delegates to the command named
 ;; here, so the UI stays decoupled from any particular workflow.  Defaults are
 ;; `agent-shell' *core* commands; a nil value means the action is unconfigured
@@ -734,9 +743,10 @@ message when the summarizer program is unavailable."
 
 (defun agent-shell-dashboard--badge (category worktree)
   "Return a propertized status badge for CATEGORY (WORKTREE tag optional).
-Rendered in `fixed-pitch' and padded to a fixed character width so every
-badge is exactly the same size under a proportional prose font; a leading
-and trailing space keep the glyph and label off the box border."
+Rendered in a monospace family (`agent-shell-dashboard-badge-family',
+falling back to the `fixed-pitch' face) and padded to a fixed character
+width, so every badge is exactly the same size under a proportional prose
+font; a leading and trailing space keep glyph and label off the border."
   ;; All glyphs are single-width, text-presentation symbols (no emoji): the
   ;; hourglass/warning emoji render double-width and colored, which made
   ;; badges different sizes.  These are uniform.
@@ -747,11 +757,14 @@ and trailing space keep the glyph and label off the box border."
                  ('ready   '("✓" "Ready"   agent-shell-dashboard-badge-ready))
                  ('killed  '("✗" "Killed"  agent-shell-dashboard-dim))
                  (_        '("•" "…"       agent-shell-dashboard-dim))))
-         ;; `fixed-pitch' after the badge face: monospace width, badge colors.
+         ;; Monospace after the badge face: equal width, badge colors kept.
+         (mono (if agent-shell-dashboard-badge-family
+                   (list :family agent-shell-dashboard-badge-family)
+                 'fixed-pitch))
          (base (propertize (format " %s %-8s" (nth 0 spec) (nth 1 spec))
-                           'face (list (nth 2 spec) 'fixed-pitch))))
+                           'face (list (nth 2 spec) mono))))
     (if worktree
-        (concat (propertize "[WT]" 'face '(agent-shell-dashboard-badge-wt fixed-pitch))
+        (concat (propertize "[WT]" 'face (list 'agent-shell-dashboard-badge-wt mono))
                 " " base)
       base)))
 
