@@ -300,11 +300,43 @@ picker (e.g. one that starts a shell with the `prompt' strategy)."
   "Return BUFFER's working directory."
   (buffer-local-value 'default-directory buffer))
 
+(defun agent-shell-dashboard--humanize-tokens (n)
+  "Format token count N compactly: 1500->2k, 500303->500k, 1000000->1M."
+  (cond
+   ((null n) "?")
+   ((>= n 1000000) (let ((m (/ n 1000000.0)))
+                     (if (or (>= m 10) (= m (ftruncate m)))
+                         (format "%dM" (round m))
+                       (format "%.1fM" m))))
+   ((>= n 1000) (format "%dk" (round (/ n 1000.0))))
+   (t (format "%d" n))))
+
+(defun agent-shell-dashboard--slim-model-name (name)
+  "Strip a trailing \" (… context)\" parenthetical from model NAME."
+  (if name
+      (string-trim (replace-regexp-in-string " *([^)]*)\\'" "" name))
+    "—"))
+
 (defun agent-shell-dashboard--model (buffer)
-  "Return BUFFER's current model display name, or \"—\"."
+  "Return BUFFER's slim model cell: \"Model [used/ctx] Thought\".
+Context is the tokens used vs the session's context window; Thought is
+the reasoning level (omitted when unavailable).  Falls back to \"—\"."
   (or (ignore-errors
         (with-current-buffer buffer
-          (agent-shell-get-model-name (agent-shell--state))))
+          (let* ((state (agent-shell--state))
+                 (name (agent-shell-dashboard--slim-model-name
+                        (agent-shell-get-model-name state)))
+                 (usage (map-elt state :usage))
+                 (used (map-elt usage :context-used))
+                 (size (map-elt usage :context-size))
+                 (ctx (when (and used size (> size 0) (> used 0))
+                        (format " [%s/%s]"
+                                (agent-shell-dashboard--humanize-tokens used)
+                                (agent-shell-dashboard--humanize-tokens size))))
+                 (thought (agent-shell-get-thought-level-name state))
+                 (thl (when (and thought (not (string-empty-p thought)))
+                        (concat " " thought))))
+            (concat name (or ctx "") (or thl "")))))
       "—"))
 
 ;; --- unseen / activity tracker (in-package; installed in the hooks section) ---
@@ -724,7 +756,7 @@ message when the summarizer program is unavailable."
     (insert " ")
     (agent-shell-dashboard--insert path 'face 'agent-shell-dashboard-dim)
     (insert " ")
-    (agent-shell-dashboard--insert (agent-shell-dashboard--fit model 18)
+    (agent-shell-dashboard--insert (agent-shell-dashboard--fit model 28)
                                    'face 'agent-shell-dashboard-model)
     (insert " ")
     (agent-shell-dashboard--insert time 'face 'agent-shell-dashboard-dim)
