@@ -735,13 +735,16 @@ message when the summarizer program is unavailable."
 (defun agent-shell-dashboard--badge (category worktree)
   "Return a propertized status badge for CATEGORY (WORKTREE tag optional).
 The label is padded to a fixed width so every badge is the same size."
+  ;; All glyphs are single-width, text-presentation symbols (no emoji): the
+  ;; hourglass/warning emoji render double-width and colored, which made
+  ;; badges different sizes.  These are uniform.
   (let* ((spec (pcase category
                  ('done    '("●" "Done"    agent-shell-dashboard-badge-done))
-                 ('working '("⏳" "Working" agent-shell-dashboard-badge-working))
-                 ('waiting '("⚠" "Waiting" agent-shell-dashboard-badge-waiting))
+                 ('working '("◐" "Working" agent-shell-dashboard-badge-working))
+                 ('waiting '("▲" "Waiting" agent-shell-dashboard-badge-waiting))
                  ('ready   '("✓" "Ready"   agent-shell-dashboard-badge-ready))
                  ('killed  '("✗" "Killed"  agent-shell-dashboard-dim))
-                 (_        '("…" "…"       agent-shell-dashboard-dim))))
+                 (_        '("•" "…"       agent-shell-dashboard-dim))))
          (base (propertize (format "%s %-7s" (nth 0 spec) (nth 1 spec))
                            'face (nth 2 spec))))
     (if worktree
@@ -1044,7 +1047,7 @@ place, so a literal would accumulate across every call and refresh."
   (let ((counts (agent-shell-dashboard--counts buffers)))
     (insert "\n")
     (agent-shell-dashboard--insert
-     (format "  ● %d done · ⏳ %d working · ⚠ %d waiting · ✓ %d ready"
+     (format "  ● %d done · ◐ %d working · ▲ %d waiting · ✓ %d ready"
              (alist-get 'done counts 0)
              (alist-get 'working counts 0)
              (alist-get 'waiting counts 0)
