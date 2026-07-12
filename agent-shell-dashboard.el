@@ -40,7 +40,7 @@
 ;; commands.  Point them at your own commands to customise behaviour without
 ;; touching this file.  See the Customization section.
 ;;
-;; Refresh: on-demand (`g'/`r'), a single idle timer, and a debounced
+;; Refresh: on-demand (`g'), a single idle timer, and a debounced
 ;; event refresh driven by agent output.  No animation.
 ;;
 ;; Colors are pulled from the live modus palette (via
@@ -164,6 +164,14 @@ Called with one argument: the session plist (see
 (defcustom agent-shell-dashboard-set-model-function #'agent-shell-set-session-model
   "Command invoked by `m' to set the model.
 Called with the session buffer at point current, when there is one."
+  :type '(choice function (const :tag "Unconfigured" nil)))
+
+(defcustom agent-shell-dashboard-rename-function
+  #'agent-shell-dashboard--rename-default
+  "Command invoked by `r' to rename the session on the row at point.
+Called with that session's buffer current.  Defaults to a built-in that
+renames the buffer; override with a command that also persists the name
+so it survives resume."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
 (defcustom agent-shell-dashboard-switch-project-function #'projectile-switch-project
@@ -777,6 +785,7 @@ message when the summarizer program is unavailable."
                   ("f" . "Fork session at point")
                   ("a" . "Conclusions report")
                   ("m" . "Set model")
+                  ("r" . "Rename session at point")
                   ("P" . "Switch project")
                   ("K" . "Kill session at point")
                   ("X" . "Close all")))
@@ -1242,6 +1251,29 @@ session buffer at point current when there is one."
                                  'agent-shell-dashboard-set-model-function
                                  (agent-shell-dashboard--buffer-at-point)))
 
+(defun agent-shell-dashboard--rename-default ()
+  "Default rename action: rename the current agent-shell buffer.
+Run with the row's buffer current by `agent-shell-dashboard-rename-at-point'."
+  (interactive)
+  (let ((new (string-trim (read-string "New session name: "))))
+    (unless (string-empty-p new)
+      (if (fboundp 'shell-maker-set-buffer-name)
+          (shell-maker-set-buffer-name (current-buffer) (format "*%s*" new))
+        (rename-buffer (format "*%s*" new) t)))))
+
+(defun agent-shell-dashboard-rename-at-point ()
+  "Rename the agent-shell session on the row at point.
+Delegates to `agent-shell-dashboard-rename-function', run with that
+session's buffer current, then refreshes."
+  (interactive)
+  (let ((buf (agent-shell-dashboard--buffer-at-point)))
+    (unless (and buf (buffer-live-p buf))
+      (user-error "Point is not on a live session row"))
+    (agent-shell-dashboard--invoke agent-shell-dashboard-rename-function
+                                   'agent-shell-dashboard-rename-function
+                                   buf)
+    (agent-shell-dashboard-refresh)))
+
 (defun agent-shell-dashboard-switch-project ()
   "Switch to a known project.
 Delegates to `agent-shell-dashboard-switch-project-function'."
@@ -1307,13 +1339,14 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (princ "  R   Reopen a previous (closed) session\n")
     (princ "  f   Fork session at point into a new shell\n")
     (princ "  m   Set model of session at point\n")
+    (princ "  r   Rename session at point\n")
     (princ "  K   Kill session at point\n")
     (princ "  X   Close all sessions\n\n")
     (princ "Insight\n")
     (princ "  a   Conclusions report (async summary of every session)\n\n")
     (princ "Misc\n")
     (princ "  P   Switch project\n")
-    (princ "  g / r   Refresh\n")
+    (princ "  g   Refresh\n")
     (princ "  q   Quit window\n")
     (princ "  ?   This help\n")))
 
@@ -1331,11 +1364,11 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   "f"         #'agent-shell-dashboard-fork-at-point
   "a"         #'agent-shell-dashboard-conclusions
   "m"         #'agent-shell-dashboard-set-model
+  "r"         #'agent-shell-dashboard-rename-at-point
   "P"         #'agent-shell-dashboard-switch-project
   "K"         #'agent-shell-dashboard-kill-at-point
   "X"         #'agent-shell-dashboard-close-all
   "g"         #'agent-shell-dashboard-refresh
-  "r"         #'agent-shell-dashboard-refresh
   "?"         #'agent-shell-dashboard-help
   "q"         #'quit-window)
 
@@ -1364,11 +1397,11 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     "f" #'agent-shell-dashboard-fork-at-point
     "a" #'agent-shell-dashboard-conclusions
     "m" #'agent-shell-dashboard-set-model
+    "r" #'agent-shell-dashboard-rename-at-point
     "P" #'agent-shell-dashboard-switch-project
     "K" #'agent-shell-dashboard-kill-at-point
     "X" #'agent-shell-dashboard-close-all
     "g" #'agent-shell-dashboard-refresh
-    "r" #'agent-shell-dashboard-refresh
     "?" #'agent-shell-dashboard-help
     "q" #'quit-window))
 
