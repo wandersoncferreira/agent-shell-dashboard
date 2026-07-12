@@ -1507,16 +1507,24 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   "Open (creating if needed) the agent-shell dashboard.
 Suitable as an `initial-buffer-choice'."
   (interactive)
-  (let ((buf (get-buffer-create agent-shell-dashboard-buffer-name)))
+  (let* ((existing (agent-shell-dashboard--get-buffer))
+         (buf (get-buffer-create agent-shell-dashboard-buffer-name)))
     (with-current-buffer buf
       (unless (derived-mode-p 'agent-shell-dashboard-mode)
-        (agent-shell-dashboard-mode))
-      (let ((inhibit-read-only t))
-        (agent-shell-dashboard--render)))
+        (agent-shell-dashboard-mode)))
+    ;; Returning to an existing dashboard: re-render but keep point on the
+    ;; same session row (via refresh's identity restore).  Only a freshly
+    ;; created dashboard renders from scratch and jumps to the first row.
+    (if existing
+        (agent-shell-dashboard-refresh)
+      (with-current-buffer buf
+        (let ((inhibit-read-only t))
+          (agent-shell-dashboard--render))))
     (agent-shell-dashboard--ensure-idle-timer)
     (if (called-interactively-p 'interactive)
         (progn (pop-to-buffer-same-window buf)
-               (with-current-buffer buf (agent-shell-dashboard--goto-first-row))
+               (unless existing
+                 (with-current-buffer buf (agent-shell-dashboard--goto-first-row)))
                buf)
       buf)))
 
