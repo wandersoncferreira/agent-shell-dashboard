@@ -161,9 +161,11 @@ Called with one argument: the session plist (see
   "Command invoked by `w' to start a new session in a git worktree."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
-(defcustom agent-shell-dashboard-set-model-function #'agent-shell-set-session-model
-  "Command invoked by `m' to set the model.
-Called with the session buffer at point current, when there is one."
+(defcustom agent-shell-dashboard-set-model-function
+  #'agent-shell-dashboard--set-model-default
+  "Command invoked by `m' to set the model of the session at point.
+Called with that session's buffer current.  Defaults to a built-in that
+pops up the models the session advertises and applies the choice."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
 (defcustom agent-shell-dashboard-rename-function
@@ -1243,6 +1245,37 @@ Delegates to `agent-shell-dashboard-conclusions-function'."
   (interactive)
   (agent-shell-dashboard--invoke agent-shell-dashboard-conclusions-function
                                  'agent-shell-dashboard-conclusions-function))
+
+(defun agent-shell-dashboard--set-model-default ()
+  "Pick a model for the current session from its advertised options.
+Default for `agent-shell-dashboard-set-model-function'.  Prompts with
+completion over the models the session advertises and applies the choice;
+messages (does not error) when the chosen model is already active."
+  (interactive)
+  (unless (derived-mode-p 'agent-shell-mode)
+    (user-error "Not in an agent-shell session"))
+  (let* ((state (agent-shell--state))
+         (models (agent-shell--get-available-models state)))
+    (unless models
+      (user-error "This session advertises no models"))
+    (let* ((current (agent-shell--current-model-id state))
+           (choices (mapcar (lambda (m)
+                              (cons (format "%s  (%s)"
+                                            (map-elt m :name) (map-elt m :model-id))
+                                    (map-elt m :model-id)))
+                            models))
+           (pick (completing-read "Model: " (mapcar #'car choices) nil t))
+           (id (cdr (assoc pick choices)))
+           (name (map-elt (seq-find (lambda (m) (equal (map-elt m :model-id) id))
+                                    models)
+                          :name)))
+      (cond
+       ((null id) (user-error "No model selected"))
+       ((and current (string= id current)) (message "Model already set: %s" name))
+       (t (agent-shell--config-option-set-model-id
+           :model-id id
+           :on-success (lambda () (message "Set model: %s" name))
+           :on-failure (lambda (err _raw) (message "Failed to set model: %s" err))))))))
 
 (defun agent-shell-dashboard-set-model ()
   "Set the model of the session on the row at point.
