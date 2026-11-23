@@ -232,6 +232,24 @@ for a session id; override with a command that presents a session
 picker (e.g. one that starts a shell with the `prompt' strategy)."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
+(defcustom agent-shell-dashboard-context-modes
+  '(dired-mode magit-mode vc-dir-mode agent-shell-mode
+    eshell-mode shell-mode term-mode vterm-mode)
+  "Major modes that, besides file-visiting buffers, mark where you are working.
+`c' and `w' start the new session from the directory of the most
+recently selected buffer that visits a file or derives from one of these
+modes, instead of wherever the dashboard buffer happened to be created.
+See `agent-shell-dashboard-context-directory'."
+  :type '(repeat symbol))
+
+(defcustom agent-shell-dashboard-new-session-directory-function
+  #'agent-shell-dashboard-context-directory
+  "Function returning the directory `c' and `w' start new sessions from.
+Called with no arguments.  A nil function, or a nil return value, falls
+back to the dashboard buffer's own `default-directory'.  agent-shell
+still resolves the project root (or worktree root) from it as usual."
+  :type '(choice function (const :tag "Dashboard's own directory" nil)))
+
 ;;;; Faces
 ;;
 ;; Every colored face carries a light-background variant so the dashboard
@@ -834,8 +852,10 @@ font; a leading and trailing space keep glyph and label off the border."
                 " " base)
       base)))
 
-(defun agent-shell-dashboard--insert-session-row (buffer)
-  "Insert one Sessions/Needs-you row for BUFFER, propertized for navigation."
+(defun agent-shell-dashboard--insert-session-row (buffer section)
+  "Insert one row for BUFFER in SECTION, propertized for navigation.
+SECTION is `needs-you' or `sessions'; a needy session appears in both,
+so the section is what tells the two rows apart when restoring point."
   (let* ((cat (agent-shell-dashboard--category buffer))
          (wt (agent-shell-dashboard--linked-worktree-p
               (agent-shell-dashboard--cwd buffer)))
@@ -866,7 +886,8 @@ font; a leading and trailing space keep glyph and label off the border."
     ;; distinguished for navigation by this per-row value (a boolean marker
     ;; would merge adjacent rows into one text-property run).
     (add-text-properties start (point)
-                         (list 'agent-shell-dashboard-buffer buffer))))
+                         (list 'agent-shell-dashboard-buffer buffer
+                               'agent-shell-dashboard-section section))))
 
 (defun agent-shell-dashboard--insert-needs-you (buffers)
   "Insert the \"Needs you\" section for the needy subset of BUFFERS."
@@ -880,19 +901,25 @@ font; a leading and trailing space keep glyph and label off the border."
         (agent-shell-dashboard--insert
          "  Nothing waiting on you. \n" 'face 'agent-shell-dashboard-dim)
       (dolist (b needy)
-        (agent-shell-dashboard--insert-session-row b)
+        (agent-shell-dashboard--insert-session-row b 'needs-you)
         (let* ((msg (agent-shell-dashboard--last-agent-message b))
                (hint (or (agent-shell-dashboard--decision-hint msg)
                          (and (eq (agent-shell-dashboard--category b) 'waiting)
                               "permission request")))
                (excerpt (ignore-errors
                           (funcall agent-shell-dashboard-excerpt-function b msg))))
+          ;; Sub-lines belong to the row above: at-point actions work from
+          ;; them, but they use a separate property so `n'/`p' skip them.
           (when hint
             (agent-shell-dashboard--insert (concat "    ↳ " hint "\n")
-                                           'face 'agent-shell-dashboard-attention))
+                                           'face 'agent-shell-dashboard-attention
+                                           'agent-shell-dashboard-owner b
+                                           'agent-shell-dashboard-section 'needs-you))
           (when excerpt
             (agent-shell-dashboard--insert (concat "    │ " excerpt "\n")
-                                           'face 'agent-shell-dashboard-quote)))))))
+                                           'face 'agent-shell-dashboard-quote
+                                           'agent-shell-dashboard-owner b
+                                           'agent-shell-dashboard-section 'needs-you)))))))
 
 (defun agent-shell-dashboard--insert-sessions (buffers)
   "Insert the Sessions section listing all BUFFERS."
@@ -903,7 +930,7 @@ font; a leading and trailing space keep glyph and label off the border."
        "  No agent-shell sessions. Press c to start one.\n"
        'face 'agent-shell-dashboard-dim)
     (dolist (b buffers)
-      (agent-shell-dashboard--insert-session-row b))))
+      (agent-shell-dashboard--insert-session-row b 'sessions))))
 
 (defun agent-shell-dashboard--insert-action (spec)
   "Insert one `[key] label' cell for SPEC, a (KEY . LABEL) cons, padded."
@@ -1073,7 +1100,8 @@ Columns: buffer name, working directory, and when the session was opened."
     (insert "\n")
     ;; Whole row carries its session plist so RET/o resumes it.
     (add-text-properties start (point)
-                         (list 'agent-shell-dashboard-session session))))
+                         (list 'agent-shell-dashboard-session session
+                               'agent-shell-dashboard-section 'recent))))
 
 (defun agent-shell-dashboard--insert-recent-sessions ()
   "Insert the Recent sessions section (previous, resumable sessions)."
@@ -1138,7 +1166,7 @@ place, so a literal would accumulate across every call and refresh."
      'face 'agent-shell-dashboard-dim)
     (insert "\n")
     (agent-shell-dashboard--insert
-     "  TAB / S-TAB next / prev row · RET open · ? help"
+     "  n / p next / prev item · RET open · ? help"
      'face 'agent-shell-dashboard-dim)
     (insert "\n")))
 
@@ -1165,36 +1193,68 @@ Assumes the buffer is current and writable."
   (let ((buf (get-buffer agent-shell-dashboard-buffer-name)))
     (and (buffer-live-p buf) buf)))
 
-(defun agent-shell-dashboard--goto-buffer-row (buffer)
-  "Put point on the row whose live session is BUFFER.  Return non-nil if found.
-Restores position by session identity (robust to re-sorting), unlike a
-raw line number."
+(defun agent-shell-dashboard--goto-row-if (pred)
+  "Put point on the first row line satisfying PRED; return point or nil.
+PRED is called with the position of each line's start."
+  (let (found)
+    (goto-char (point-min))
+    (while (and (not found) (not (eobp)))
+      (if (funcall pred (line-beginning-position))
+          (setq found (goto-char (line-beginning-position)))
+        (forward-line 1)))
+    found))
+
+(defun agent-shell-dashboard--goto-buffer-row (buffer &optional section)
+  "Put point on the row for live session BUFFER.  Return non-nil if found.
+With SECTION, only a row in that section matches.  Restores position by
+session identity (robust to re-sorting), unlike a raw line number."
   (when (buffer-live-p buffer)
-    (let (found)
-      (goto-char (point-min))
-      (while (and (not found) (not (eobp)))
-        (if (eq (get-text-property (line-beginning-position)
-                                   'agent-shell-dashboard-buffer)
-                buffer)
-            (setq found (goto-char (line-beginning-position)))
-          (forward-line 1)))
-      found)))
+    (agent-shell-dashboard--goto-row-if
+     (lambda (pos)
+       (and (eq (get-text-property pos 'agent-shell-dashboard-buffer) buffer)
+            (or (null section)
+                (eq (get-text-property pos 'agent-shell-dashboard-section)
+                    section)))))))
+
+(defun agent-shell-dashboard--goto-recent-row (id)
+  "Put point on the Recent-sessions row whose session id is ID."
+  (when id
+    (agent-shell-dashboard--goto-row-if
+     (lambda (pos)
+       (equal (plist-get (get-text-property pos 'agent-shell-dashboard-session)
+                         :id)
+              id)))))
 
 (defun agent-shell-dashboard--point-snapshot (pos)
   "Return a restore snapshot for buffer position POS.
-Records the session row there (by buffer identity, which survives
-re-sorting) and its line number as a fallback."
-  (list :target (get-text-property (min pos (point-max))
-                                   'agent-shell-dashboard-buffer)
-        :line (line-number-at-pos pos)))
+Records which item point is on — the live session (buffer identity,
+including from a Needs-you sub-line), the section it is listed in, or
+the recent session id — plus the line number as a last resort."
+  (let ((pos (min pos (point-max))))
+    (list :buffer (or (get-text-property pos 'agent-shell-dashboard-buffer)
+                      (get-text-property pos 'agent-shell-dashboard-owner))
+          :section (get-text-property pos 'agent-shell-dashboard-section)
+          :session-id (plist-get (get-text-property
+                                  pos 'agent-shell-dashboard-session)
+                                 :id)
+          :line (line-number-at-pos pos))))
 
 (defun agent-shell-dashboard--restore-point (snapshot)
-  "Move point to SNAPSHOT's row (by identity) or its line, and return point."
-  (or (when-let* ((target (plist-get snapshot :target)))
-        (agent-shell-dashboard--goto-buffer-row target))
-      (progn (goto-char (point-min))
-             (forward-line (1- (plist-get snapshot :line)))
-             (point))))
+  "Move point to SNAPSHOT's item and return point.
+Prefers the same session in the same section, so a session that turns
+needy (and so is now listed twice) does not yank point from Sessions up
+into Needs you.  If the item left its section — say it stopped needing
+you — point follows it to wherever it is still listed.  Falls back to
+the recent session id, then to the old line number."
+  (let ((buffer (plist-get snapshot :buffer)))
+    (or (and buffer
+             (or (agent-shell-dashboard--goto-buffer-row
+                  buffer (plist-get snapshot :section))
+                 (agent-shell-dashboard--goto-buffer-row buffer)))
+        (agent-shell-dashboard--goto-recent-row (plist-get snapshot :session-id))
+        (progn (goto-char (point-min))
+               (forward-line (1- (plist-get snapshot :line)))
+               (point)))))
 
 (defun agent-shell-dashboard-refresh ()
   "Rebuild the dashboard, keeping point on the same session when possible.
@@ -1330,8 +1390,10 @@ file does not stack anything."
 ;;;; Navigation & actions
 
 (defun agent-shell-dashboard--buffer-at-point ()
-  "Return the agent-shell buffer described by the row at point, or nil."
-  (get-text-property (point) 'agent-shell-dashboard-buffer))
+  "Return the agent-shell buffer described by the row at point, or nil.
+A Needs-you sub-line (hint or summary) counts as its session's row."
+  (or (get-text-property (point) 'agent-shell-dashboard-buffer)
+      (get-text-property (point) 'agent-shell-dashboard-owner)))
 
 (defun agent-shell-dashboard--session-at-point ()
   "Return the recent-session plist described by the row at point, or nil."
@@ -1416,19 +1478,56 @@ Built-in default for `agent-shell-dashboard-close-all-function'."
           (dolist (b buffers) (when (buffer-live-p b) (kill-buffer b))))
         (message "Closed %d session(s)" (length buffers))))))
 
+(defun agent-shell-dashboard--context-buffer-p (buffer)
+  "Return non-nil when BUFFER says where the user is working.
+That is a file-visiting buffer, or one whose major mode derives from
+one of `agent-shell-dashboard-context-modes'."
+  (and (buffer-live-p buffer)
+       (not (string-prefix-p " " (buffer-name buffer)))
+       (not (minibufferp buffer))
+       (with-current-buffer buffer
+         (and (not (derived-mode-p 'agent-shell-dashboard-mode))
+              (or buffer-file-name
+                  (apply #'derived-mode-p agent-shell-dashboard-context-modes))))))
+
+(defun agent-shell-dashboard-context-directory ()
+  "Return the directory of the buffer you were most recently working in.
+Walks `buffer-list' (most recently selected first) for the first buffer
+satisfying `agent-shell-dashboard--context-buffer-p', so after visiting
+another repo or worktree and coming back to the dashboard, `c' starts
+the session there.  Returns nil when no such buffer exists.  Default
+value of `agent-shell-dashboard-new-session-directory-function'."
+  (when-let* ((buf (seq-find #'agent-shell-dashboard--context-buffer-p
+                             (buffer-list (selected-frame)))))
+    (buffer-local-value 'default-directory buf)))
+
+(defun agent-shell-dashboard--new-session-directory ()
+  "Return the `default-directory' to start a new session from."
+  (or (when agent-shell-dashboard-new-session-directory-function
+        (ignore-errors
+          (funcall agent-shell-dashboard-new-session-directory-function)))
+      default-directory))
+
 (defun agent-shell-dashboard-new-session ()
-  "Start a new agent-shell session.
-Delegates to `agent-shell-dashboard-new-session-function'."
+  "Start a new agent-shell session where you were last working.
+The directory comes from
+`agent-shell-dashboard-new-session-directory-function'.  Delegates to
+`agent-shell-dashboard-new-session-function'."
   (interactive)
-  (agent-shell-dashboard--invoke agent-shell-dashboard-new-session-function
-                                 'agent-shell-dashboard-new-session-function))
+  (let ((default-directory (agent-shell-dashboard--new-session-directory)))
+    (message "New session from %s" (abbreviate-file-name default-directory))
+    (agent-shell-dashboard--invoke agent-shell-dashboard-new-session-function
+                                   'agent-shell-dashboard-new-session-function)))
 
 (defun agent-shell-dashboard-new-worktree ()
-  "Start a new agent-shell session in a git worktree.
-Delegates to `agent-shell-dashboard-new-worktree-function'."
+  "Start a new agent-shell session in a git worktree of the repo you were in.
+The repo is found from
+`agent-shell-dashboard-new-session-directory-function'.  Delegates to
+`agent-shell-dashboard-new-worktree-function'."
   (interactive)
-  (agent-shell-dashboard--invoke agent-shell-dashboard-new-worktree-function
-                                 'agent-shell-dashboard-new-worktree-function))
+  (let ((default-directory (agent-shell-dashboard--new-session-directory)))
+    (agent-shell-dashboard--invoke agent-shell-dashboard-new-worktree-function
+                                   'agent-shell-dashboard-new-worktree-function)))
 
 (defun agent-shell-dashboard-conclusions ()
   "Summarise every session's conclusion.
@@ -1553,11 +1652,11 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (princ "agent-shell-dashboard — keybindings\n")
     (princ "===================================\n\n")
     (princ "Navigation\n")
-    (princ "  TAB / S-TAB   Next / previous session row\n")
+    (princ "  n / p         Next / previous item (also TAB / S-TAB)\n")
     (princ "  RET / o       Open live session / reopen recent session at point\n\n")
     (princ "Sessions\n")
-    (princ "  c   New session\n")
-    (princ "  w   New worktree session\n")
+    (princ "  c   New session (in the project you were last working in)\n")
+    (princ "  w   New worktree session (of that project)\n")
     (princ "  R   Reopen a previous (closed) session\n")
     (princ "  f   Fork session at point into a new shell\n")
     (princ "  m   Set model of session at point\n")
@@ -1577,6 +1676,8 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   :doc "Keymap for `agent-shell-dashboard-mode' (Emacs state)."
   "TAB"       #'agent-shell-dashboard-next-row
   "<backtab>" #'agent-shell-dashboard-prev-row
+  "n"         #'agent-shell-dashboard-next-row
+  "p"         #'agent-shell-dashboard-prev-row
   "RET"       #'agent-shell-dashboard-open
   "o"         #'agent-shell-dashboard-open
   "c"         #'agent-shell-dashboard-new-session
@@ -1612,6 +1713,8 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   (evil-define-key* 'normal agent-shell-dashboard-mode-map
     (kbd "TAB")       #'agent-shell-dashboard-next-row
     (kbd "<backtab>") #'agent-shell-dashboard-prev-row
+    "n" #'agent-shell-dashboard-next-row
+    "p" #'agent-shell-dashboard-prev-row
     (kbd "RET")       #'agent-shell-dashboard-open
     "o" #'agent-shell-dashboard-open
     "c" #'agent-shell-dashboard-new-session
