@@ -215,6 +215,25 @@ Defaults to a built-in that kills every agent-shell buffer after
 confirmation.  Override to add pre-close checks."
   :type '(choice function (const :tag "Unconfigured" nil)))
 
+(defcustom agent-shell-dashboard-display-action nil
+  "Display action used when `RET'/`o' opens a live session.
+nil (the default) means use agent-shell's own
+`agent-shell-display-action', so a session opened from the dashboard
+shows up exactly where agent-shell would put it (by default, in place
+of the dashboard).  Otherwise a `display-buffer' action.  A session
+already visible in some window is selected there instead."
+  :type '(choice (const :tag "Same as agent-shell" nil)
+                 (cons (repeat function) alist)))
+
+(defcustom agent-shell-dashboard-send-function #'agent-shell-send-dwim
+  "Command invoked by `s' to send context to the session at point.
+Called interactively from the buffer you were last working in (see
+`agent-shell-dashboard-context-directory'), so the default,
+`agent-shell-send-dwim', picks up that buffer's region, error at point
+or file as usual, but delivers it to the session on the row at point
+rather than to the project's last-accessed shell."
+  :type '(choice function (const :tag "Unconfigured" nil)))
+
 (defcustom agent-shell-dashboard-fork-session-function #'agent-shell-fork
   "Command invoked by `f' to fork the session on the row at point.
 Called with the session buffer at point current, so core
@@ -945,6 +964,7 @@ so the section is what tells the two rows apart when restoring point."
    "Quick actions" 'agent-shell-dashboard-heading-actions)
   (let ((specs '(("c" . "New session")
                  ("w" . "New worktree session")
+                 ("s" . "Send context to session")
                  ("R" . "Reopen a previous session")
                  ("f" . "Fork session at point")
                  ("a" . "Conclusions report")
@@ -1407,6 +1427,19 @@ and recent-session rows (`agent-shell-dashboard-session')."
     (or (get-text-property p 'agent-shell-dashboard-buffer)
         (get-text-property p 'agent-shell-dashboard-session))))
 
+(defun agent-shell-dashboard--display (buffer)
+  "Select BUFFER's window if visible, else display it and select it.
+Uses `agent-shell-dashboard-display-action', falling back to
+`agent-shell-display-action'.  A bare `pop-to-buffer' splits the frame
+when the dashboard is the only window, which is what made sessions open
+in a new side window."
+  (if-let* ((win (get-buffer-window buffer)))
+      (select-window win)
+    (pop-to-buffer buffer
+                   (or agent-shell-dashboard-display-action
+                       (bound-and-true-p agent-shell-display-action)
+                       '(display-buffer-same-window)))))
+
 (defun agent-shell-dashboard-open ()
   "Open or reopen the session on the row at point.
 A live-session row is switched to; a recent-session row is resumed via
@@ -1416,7 +1449,7 @@ A live-session row is switched to; a recent-session row is resumed via
         (session (agent-shell-dashboard--session-at-point)))
     (cond
      (buf (if (buffer-live-p buf)
-              (pop-to-buffer buf)
+              (agent-shell-dashboard--display buf)
             (user-error "That session's buffer is gone — press g to refresh")))
      (session (funcall agent-shell-dashboard-resume-recent-function session))
      (t (user-error "Point is not on a session row")))))
@@ -1490,15 +1523,26 @@ one of `agent-shell-dashboard-context-modes'."
               (or buffer-file-name
                   (apply #'derived-mode-p agent-shell-dashboard-context-modes))))))
 
+(defun agent-shell-dashboard--context-buffer (&optional exclude-shells)
+  "Return the buffer you were most recently working in, or nil.
+Walks `buffer-list' (most recently selected first) for the first buffer
+satisfying `agent-shell-dashboard--context-buffer-p'.  With
+EXCLUDE-SHELLS, skip agent-shell buffers (whose context is not worth
+sending to another shell)."
+  (seq-find (lambda (b)
+              (and (agent-shell-dashboard--context-buffer-p b)
+                   (not (and exclude-shells
+                             (with-current-buffer b
+                               (derived-mode-p 'agent-shell-mode))))))
+            (buffer-list (selected-frame))))
+
 (defun agent-shell-dashboard-context-directory ()
   "Return the directory of the buffer you were most recently working in.
-Walks `buffer-list' (most recently selected first) for the first buffer
-satisfying `agent-shell-dashboard--context-buffer-p', so after visiting
-another repo or worktree and coming back to the dashboard, `c' starts
-the session there.  Returns nil when no such buffer exists.  Default
-value of `agent-shell-dashboard-new-session-directory-function'."
-  (when-let* ((buf (seq-find #'agent-shell-dashboard--context-buffer-p
-                             (buffer-list (selected-frame)))))
+So after visiting another repo or worktree and coming back to the
+dashboard, `c' starts the session there.  Returns nil when there is no
+such buffer.  Default value of
+`agent-shell-dashboard-new-session-directory-function'."
+  (when-let* ((buf (agent-shell-dashboard--context-buffer)))
     (buffer-local-value 'default-directory buf)))
 
 (defun agent-shell-dashboard--new-session-directory ()
@@ -1528,6 +1572,35 @@ The repo is found from
   (let ((default-directory (agent-shell-dashboard--new-session-directory)))
     (agent-shell-dashboard--invoke agent-shell-dashboard-new-worktree-function
                                    'agent-shell-dashboard-new-worktree-function)))
+
+(defun agent-shell-dashboard-send-dwim (&optional arg)
+  "Send context from where you were working to the session at point.
+Runs `agent-shell-dashboard-send-function' (default
+`agent-shell-send-dwim') from the buffer you were last working in, so
+it picks up that buffer's region, error at point, or file, and sends it
+to the session on the row at point.  Off a session row, agent-shell
+chooses the shell as it normally would.  Prefix ARG is passed through:
+\\[universal-argument] starts a new shell,
+\\[universal-argument] \\[universal-argument] prompts for one."
+  (interactive "P")
+  (let ((target (agent-shell-dashboard--buffer-at-point))
+        (source (agent-shell-dashboard--context-buffer t))
+        (fn agent-shell-dashboard-send-function))
+    (unless source
+      (user-error "No file or project buffer to take context from"))
+    (when (and target (not (buffer-live-p target)))
+      (user-error "That session's buffer is gone — press g to refresh"))
+    (with-current-buffer source
+      (let ((current-prefix-arg arg))
+        (if (and target (null arg) (fboundp 'agent-shell--shell-buffer))
+            ;; `agent-shell-send-dwim' targets the project's last-accessed
+            ;; shell; point it at the row's session instead.
+            (cl-letf (((symbol-function 'agent-shell--shell-buffer)
+                       (lambda (&rest _) target)))
+              (agent-shell-dashboard--invoke
+               fn 'agent-shell-dashboard-send-function))
+          (agent-shell-dashboard--invoke
+           fn 'agent-shell-dashboard-send-function))))))
 
 (defun agent-shell-dashboard-conclusions ()
   "Summarise every session's conclusion.
@@ -1657,6 +1730,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (princ "Sessions\n")
     (princ "  c   New session (in the project you were last working in)\n")
     (princ "  w   New worktree session (of that project)\n")
+    (princ "  s   Send region/error/file from that buffer to session at point\n")
     (princ "  R   Reopen a previous (closed) session\n")
     (princ "  f   Fork session at point into a new shell\n")
     (princ "  m   Set model of session at point\n")
@@ -1681,6 +1755,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
   "RET"       #'agent-shell-dashboard-open
   "o"         #'agent-shell-dashboard-open
   "c"         #'agent-shell-dashboard-new-session
+  "s"         #'agent-shell-dashboard-send-dwim
   "w"         #'agent-shell-dashboard-new-worktree
   "R"         #'agent-shell-dashboard-resume-session
   "f"         #'agent-shell-dashboard-fork-at-point
@@ -1718,6 +1793,7 @@ live buffer.  Refreshes afterwards so the reopened session appears."
     (kbd "RET")       #'agent-shell-dashboard-open
     "o" #'agent-shell-dashboard-open
     "c" #'agent-shell-dashboard-new-session
+    "s" #'agent-shell-dashboard-send-dwim
     "w" #'agent-shell-dashboard-new-worktree
     "R" #'agent-shell-dashboard-resume-session
     "f" #'agent-shell-dashboard-fork-at-point
